@@ -30,7 +30,7 @@ def polar_map(adfobj):
 
     """
     #Notify user that script has started:
-    print("  Generating polar maps...")
+    print("\n  Generating polar maps...")
 
     #
     # Use ADF api to get all necessary information
@@ -63,7 +63,7 @@ def polar_map(adfobj):
     else:
         data_name = adfobj.get_baseline_info("cam_case_name", required=True) # does not get used, is just here as a placemarker
         data_list = [data_name] # gets used as just the name to search for climo files HAS TO BE LIST
-        data_loc  = adfobj.get_baseline_info("cam_climo_loc", required=True)
+        data_loc  = model_rgrid_loc #Just use the re-gridded model data path
 
     res = adfobj.variable_defaults # will be dict of variable-specific plot preferences
     # or an empty dictionary if use_defaults was not specified in YAML.
@@ -73,7 +73,11 @@ def polar_map(adfobj):
     # -- So check for it, and default to png
     basic_info_dict = adfobj.read_config_var("diag_basic_info")
     plot_type = basic_info_dict.get('plot_type', 'png')
-    print(f"NOTE: Plot type is set to {plot_type}")
+    print(f"\t NOTE: Plot type is set to {plot_type}")
+
+    # check if existing plots need to be redone
+    redo_plot = adfobj.get_basic_info('redo_plot')
+    print(f"\t NOTE: redo_plot is set to {redo_plot}")
     #-----------------------------------------
 
     #Set data path variables:
@@ -82,6 +86,10 @@ def polar_map(adfobj):
     if not adfobj.compare_obs:
         dclimo_loc  = Path(data_loc)
     #-----------------------
+
+    #Determine if user wants to plot 3-D variables on
+    #pressure levels:
+    pres_levs = adfobj.get_basic_info("plot_press_levels")
 
     #Set seasonal ranges:
     seasons = {"ANN": np.arange(1,13,1),
@@ -115,7 +123,7 @@ def polar_map(adfobj):
         #End if
 
         #Notify user of variable being plotted:
-        print("\t - polar maps for {}".format(var))
+        print(f"\t - polar maps for {var}")
 
         # Check res for any variable specific options that need to be used BEFORE going to the plot:
         if var in res:
@@ -136,7 +144,7 @@ def polar_map(adfobj):
                 #Set data name:
                 data_name = data_src
             else:
-                oclim_fils = sorted(list(dclimo_loc.glob("{}_{}_*.nc".format(data_src, var))))
+                oclim_fils = sorted(dclimo_loc.glob(f"{data_src}_{var}_baseline.nc"))
 
             if len(oclim_fils) > 1:
                 oclim_ds = xr.open_mfdataset(oclim_fils, combine='by_coords')
@@ -157,11 +165,11 @@ def polar_map(adfobj):
 
                 #Check if plot output directory exists, and if not, then create it:
                 if not plot_loc.is_dir():
-                    print("    {} not found, making new directory".format(plot_loc))
+                    print(f"    {plot_loc} not found, making new directory")
                     plot_loc.mkdir(parents=True)
 
                 # load re-gridded model files:
-                mclim_fils = sorted(list(mclimo_rg_loc.glob("{}_{}_{}_*.nc".format(data_src, case_name, var))))
+                mclim_fils = sorted(mclimo_rg_loc.glob(f"{data_src}_{case_name}_{var}_*.nc"))
 
                 if len(mclim_fils) > 1:
                     mclim_ds = xr.open_mfdataset(mclim_fils, combine='by_coords')
@@ -223,39 +231,121 @@ def polar_map(adfobj):
                             # Follow other scripts:  [variable]_[season]_[AxesDescription]_[Operation].[plot_type]
                             nh_plot_name = plot_loc / f"{var}_{s}_NHPolar_Mean.{plot_type}"
                             sh_plot_name = plot_loc / f"{var}_{s}_SHPolar_Mean.{plot_type}"
+   
+                            for plot_name in [nh_plot_name, sh_plot_name]:
 
-                            #Remove old plot, if it already exists:
-                            [pn.unlink() for pn in [nh_plot_name, sh_plot_name] if pn.is_file()]
+                                # If redo_plot set to True: remove old plot, if it already exists:
+                                if (not redo_plot) and plot_name.is_file():
+                                    continue
+                                else:  
+                                    if plot_name.is_file():                                    
+                                        plot_name.unlink()
 
-                            #Create new plot:
-                            # NOTE: send vres as kwarg dictionary.  --> ONLY vres, not the full res
-                            # This relies on `plot_map_and_save` knowing how to deal with the options
-                            # currently knows how to handle:
-                            #   colormap, contour_levels, diff_colormap, diff_contour_levels, tiString, tiFontSize, mpl
-                            #   *Any other entries will be ignored.
-                            # NOTE: If we were doing all the plotting here, we could use whatever we want from the provided YAML file.
-
-                            # pf.plot_map_and_save(plot_name, mseasons[s], oseasons[s], dseasons[s], **vres)
-
-                            nhfig = make_polar_plot(mseasons[s], oseasons[s], dseasons[s], hemisphere="NH", **vres)
-                            shfig = make_polar_plot(mseasons[s], oseasons[s], dseasons[s], hemisphere="SH", **vres)
-
-                            # Save files
-                            nhfig.savefig(nh_plot_name, bbox_inches='tight', dpi=300)
-                            shfig.savefig(sh_plot_name, bbox_inches='tight', dpi=300)
-
-                            # Close figures to avoid memory issues:
-                            plt.close(nhfig)
-                            plt.close(shfig)
+                                    #Create new plot:
+                                    # NOTE: send vres as kwarg dictionary.  --> ONLY vres, not the full res
+                                    # This relies on `plot_map_and_save` knowing how to deal with the options
+                                    # currently knows how to handle:
+                                    #   colormap, contour_levels, diff_colormap, diff_contour_levels, tiString, tiFontSize, mpl
+                                    #   *Any other entries will be ignored.
+                                    # NOTE: If we were doing all the plotting here, we could use whatever we want from the provided YAML file.
+                                        
+                                    #Determine hemisphere to plot based on plot file name:
+                                    if plot_name == nh_plot_name:
+                                        hemi = "NH"
+                                    else:
+                                        hemi = "SH"
+                                    #End if
+                                    
+                                    fig = make_polar_plot(mseasons[s], oseasons[s], dseasons[s], hemisphere=hemi, **vres)
+                                    
+                                    # Save file:
+                                    fig.savefig(plot_name, bbox_inches='tight', dpi=300)
+                                                                        
+                                    # Close figure to avoid memory issues:
+                                    plt.close(fig)
 
                     else: #mdata dimensions check
                         print("\t - skipping polar map for {} as it doesn't have only lat/lon dims.".format(var))
                     #End if (dimensions check)
 
-                else: #odata dimensions check
-                     print("\t - skipping polar map for {} as it doesn't have only lat/lon dims.".format(var))
+                elif pres_levs: #Is the user wanting to interpolate to a specific pressure level?
 
-                #End if (dimensions check)
+                    #Check that case inputs have the correct dimensions (including "lev"):
+                    _, has_lev = pf.zm_validate_dims(mdata)
+
+                    if has_lev:
+
+                        #Loop over pressure levels:
+                        for pres in pres_levs:
+
+                            #Check that the user-requested pressure level
+                            #exists in the model data, which should already
+                            #have been interpolated to the standard reference
+                            #pressure levels:
+                            if not (pres in mclim_ds['lev']):
+                                #Move on to the next pressure level:
+                                print(f"plot_press_levels value '{pres}' not a standard reference pressure, so skipping.")
+                                continue
+                            #End if
+
+                            #Create new dictionaries:
+                            mseasons = {}
+                            oseasons = {}
+                            dseasons = {} # hold the differences
+
+                            #Loop over season dictionary:
+                            for s in seasons:
+                                mseasons[s] = mdata.sel(time=seasons[s], lev=pres).mean(dim='time')
+                                oseasons[s] = odata.sel(time=seasons[s], lev=pres).mean(dim='time')
+                                # difference: each entry should be (lat, lon)
+                                dseasons[s] = mseasons[s] - oseasons[s]
+
+                                # make plots: northern and southern hemisphere separately
+                                # Follow other scripts:  [variable]_[season]_[AxesDescription]_[Operation].[plot_type]
+                                nh_plot_name = plot_loc / f"{var}_{pres}hpa_{s}_NHPolar_Mean.{plot_type}"
+                                sh_plot_name = plot_loc / f"{var}_{pres}hpa_{s}_SHPolar_Mean.{plot_type}"
+
+                                for plot_name in [nh_plot_name, sh_plot_name]:
+
+                                    # If redo_plot set to True: remove old plot, if it already exists:
+                                    if (not redo_plot) and plot_name.is_file():
+                                        continue
+                                    else:
+                                        if plot_name.is_file():
+                                            plot_name.unlink()
+
+                                        #Create new plot:
+                                        # NOTE: send vres as kwarg dictionary.  --> ONLY vres, not the full res
+                                        # This relies on `plot_map_and_save` knowing how to deal with the options
+                                        # currently knows how to handle:
+                                        #   colormap, contour_levels, diff_colormap, diff_contour_levels, tiString, tiFontSize, mpl
+                                        #   *Any other entries will be ignored.
+                                        # NOTE: If we were doing all the plotting here, we could use whatever we want from the provided YAML file.
+
+                                        #Determine hemisphere to plot based on plot file name:
+                                        if plot_name == nh_plot_name:
+                                            hemi = "NH"
+                                        else:
+                                            hemi = "SH"
+                                        #End if
+                                    
+                                        fig = make_polar_plot(mseasons[s], oseasons[s], dseasons[s], hemisphere=hemi, **vres)
+                                    
+                                        # Save file:
+                                        fig.savefig(plot_name, bbox_inches='tight', dpi=300)
+                                        
+                                        # Close figure to avoid memory issues:
+                                        plt.close(fig)
+
+                            #End for (seasons)
+                        #End for (pressure level)
+                    else:
+                        print(f"\t - variable '{var}' has no vertical dimension but is not just time/lat/lon, so skipping.")
+                    #End if (has_lev)
+
+                else: #odata dimensions check
+                    print(f"\t - skipping polar map for {var} as it has more than lat/lon dims, but no pressure levels were provided")
+                #End if (dimensions check and pressure levels)
             #End for (case loop)
         #End for (obs/baseline loop)
     #End for (variable loop)
